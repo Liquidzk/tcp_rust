@@ -1,7 +1,17 @@
 extern crate tun_tap;
-use std::{io, vec};
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::{clone, io, vec};
+mod tcp;
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+struct Quad {
+    src: (Ipv4Addr, u16),
+    dst: (Ipv4Addr, u16),
+}
 
 fn main() -> io::Result<()> {
+    let mut connections: HashMap<Quad, tcp::State> = HashMap::new();
     let nic = tun_tap::Iface::new("tun0", tun_tap::Mode::Tun).expect("failed to cr");
     let mut buf = vec![0u8; 1504];
     loop {
@@ -18,11 +28,11 @@ fn main() -> io::Result<()> {
         }
 
         match etherparse::Ipv4HeaderSlice::from_slice(&buf[4..]) {
-            Ok(p) => {
-                let src = p.source_addr();
-                let dst = p.destination_addr();
-                let ip_protol = p.protocol();
-                let payload = p.payload_len();
+            Ok(ip_header) => {
+                let src = ip_header.source_addr();
+                let dst = ip_header.destination_addr();
+                let ip_protol = ip_header.protocol();
+                let payload = ip_header.payload_len();
                 if ip_protol != 0x06 {
                     //忽略除了TCP以外的报文
                     eprintln!(
@@ -31,16 +41,16 @@ fn main() -> io::Result<()> {
                     );
                     continue;
                 }
-                match etherparse::TcpHeaderSlice::from_slice(&buf[4 + p.slice().len()..]) {
-                    Ok(t) => {
-                        eprintln!(
-                            "From {:?}:{:?}, len:{:?}, dst:{:?}:{:?}",
-                            src,
-                            t.source_port(),
-                            t.slice().len(),
-                            dst,
-                            t.destination_port()
-                        );
+                match etherparse::TcpHeaderSlice::from_slice(&buf[4 + ip_header.slice().len()..]) {
+                    Ok(tcp_header) => {
+                        let data_start = 4 + ip_header.slice().len() + tcp_header.slice().len();
+                        connections
+                            .entry(Quad {
+                                src: (src, tcp_header.source_port()),
+                                dst: (dst, tcp_header.destination_port()),
+                            })
+                            .or_default().on_packet(ip_header, tcp_header, &buf[data_start..nbytes]);
+                        
                     }
                     Err(e) => {
                         eprintln!("TCP parse error: {:?}", e);
