@@ -49,8 +49,9 @@ fn main() -> io::Result<()> {
                                 src: (src, tcp_header.source_port()),
                                 dst: (dst, tcp_header.destination_port()),
                             })
-                            .or_default().on_packet(ip_header, tcp_header, &buf[data_start..nbytes]);
-                        
+                            .or_default()
+                            .on_packet(&nic, ip_header, tcp_header, &buf[data_start..nbytes])
+                            .unwrap();
                     }
                     Err(e) => {
                         eprintln!("TCP parse error: {:?}", e);
