@@ -2,6 +2,8 @@ extern crate tun_tap;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::{clone, io, vec};
+
+use tcp::Connection;
 mod tcp;
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
@@ -11,23 +13,25 @@ struct Quad {
 }
 
 fn main() -> io::Result<()> {
-    let mut connections: HashMap<Quad, tcp::State> = HashMap::new();
-    let nic = tun_tap::Iface::new("tun0", tun_tap::Mode::Tun).expect("failed to cr");
+    let mut connections: HashMap<Quad, tcp::Connection> = HashMap::new();
+    let listen = 80;
+    let nic = tun_tap::Iface::without_packet_info("tun0", tun_tap::Mode::Tun).expect("failed to cr");
     let mut buf = vec![0u8; 1504];
+    
     loop {
         let nbytes = nic.recv(&mut buf)?;
-        let flags = u16::from_be_bytes([buf[0], buf[1]]);
-        let protol = u16::from_be_bytes([buf[2], buf[3]]);
-        if protol != 0x0800 {
-            //先忽略除了IPv4报文之外的报文
-            eprintln!(
-                "Can't parse if it is not a IPv4 packet. Protol: {:x} ",
-                protol
-            );
-            continue;
-        }
+        // let flags = u16::from_be_bytes([buf[0], buf[1]]);
+        // let protol = u16::from_be_bytes([buf[2], buf[3]]);
+        // if protol != 0x0800 {
+        //     //先忽略除了IPv4报文之外的报文
+        //     eprintln!(
+        //         "Can't parse if it is not a IPv4 packet. Protol: {:x} ",
+        //         protol
+        //     );
+        //     continue;
+        // }
 
-        match etherparse::Ipv4HeaderSlice::from_slice(&buf[4..]) {
+        match etherparse::Ipv4HeaderSlice::from_slice(&buf[..nbytes]) {
             Ok(ip_header) => {
                 let src = ip_header.source_addr();
                 let dst = ip_header.destination_addr();
@@ -41,15 +45,18 @@ fn main() -> io::Result<()> {
                     );
                     continue;
                 }
-                match etherparse::TcpHeaderSlice::from_slice(&buf[4 + ip_header.slice().len()..]) {
+                match etherparse::TcpHeaderSlice::from_slice(&buf[ip_header.slice().len()..]) {
                     Ok(tcp_header) => {
-                        let data_start = 4 + ip_header.slice().len() + tcp_header.slice().len();
+                        if tcp_header.destination_port() != listen {
+                            continue;
+                        }
+                        let data_start = ip_header.slice().len() + tcp_header.slice().len();
                         connections
                             .entry(Quad {
                                 src: (src, tcp_header.source_port()),
                                 dst: (dst, tcp_header.destination_port()),
                             })
-                            .or_default()
+                            .or_insert(Connection::accept(&nic, ip_header.clone(), tcp_header.clone()))
                             .on_packet(&nic, ip_header, tcp_header, &buf[data_start..nbytes])
                             .unwrap();
                     }

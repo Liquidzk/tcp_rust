@@ -1,3 +1,9 @@
+use std::io::Write;
+
+use crate::tcp;
+
+
+
 pub enum State {
     Closed,
     Listen,
@@ -5,12 +11,50 @@ pub enum State {
     Establish,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State::Listen
-    }
+pub struct Connection {
+    state: State,
+    send: Send_Sequence_Space,
+    recv: Recv_Sequence_Space,
 }
-impl State {
+ 
+// RFC 793 S3.2 
+pub struct Send_Sequence_Space {
+    // "Unacknowledged"（未确认的）。这是已发送但尚未收到确认的数据的序列号的最小值。
+    una: u32,
+    // nxt: "Next"（下一个）。这是下一个要发送的数据的序列号。
+    nxt: u32,
+    // "Window"（窗口）。这是接收方当前允许发送方发送的数据量，是一种流控制机制。
+    wnd: u16,
+    // "Urgent Pointer"（紧急指针）。当设置为真（true）时，表示有紧急数据需要被处理。
+    up: bool,
+    /* 
+       wl1, wl2: 这两个变量与 "Window Update"（窗口更新）相关。
+       它们用于确定何时可以更新窗口的大小。
+       wl1 记录了最后一次接收窗口更新的序列号，
+       而 wl2 记录了最后一次接收窗口更新的确认号。
+    */
+    wl1: u32,
+    wl2: u32,
+    /**
+       "Initial Send Sequence number"（初始发送序列号）。
+       这是一个连接开始时的序列号，用于数据包的排序和丢失数据的检测。
+    **/  
+    iss: u32,
+}
+
+pub struct Recv_Sequence_Space {
+    // 下一个期望接收的数据的序列号
+    nxt: u32,
+    // 接收方愿意接收的数据量
+    wnd: u16,
+    // 表示是否接收到紧急数据
+    up: bool,
+    // 连接开始时接收的第一个数据字节的序列号
+    irs: u32,
+}
+
+
+impl Connection {
     pub fn on_packet<'a>(
         &mut self,
         nic: &tun_tap::Iface,
@@ -18,41 +62,55 @@ impl State {
         tcp_header: etherparse::TcpHeaderSlice<'a>,
         data: &'a [u8],
     ) -> std::io::Result<usize> {
+        
         let mut buf = [0u8; 1500];
         let mut writter = &mut buf[..];
-        match *self {
+        match self.state {
             State::Closed => {
                 //throw out the packet
                 return Ok(0);
             }
             State::Listen => {
-                if !tcp_header.syn() {
-                    return Ok(0);
-                }
-                //send a ack
-                let mut ack_syn = etherparse::TcpHeader::new(
-                    tcp_header.destination_port(),
-                    tcp_header.source_port(),
-                    0,
-                    0,
-                );
-                ack_syn.syn = true;
-                ack_syn.ack = true;
-                let ipv4_packet = etherparse::Ipv4Header::new(
-                    ack_syn.header_len(),
-                    64,
-                    6,
-                    ip_header.destination(),
-                    ip_header.source(),
-                );
-                ipv4_packet.write(&mut writter).unwrap();
-                ack_syn.write(&mut writter).unwrap();
-                let writer = writter.len();
-                nic.send(&buf[..writer]).unwrap();
-                return Ok(writer);
+                
             }
-            State::SynRecv => {}
-            State::Establish => {}
+            State::SynRecv => {
+                //send a ack
+                if tcp_header.syn() {
+                    let mut ack_syn = etherparse::TcpHeader::new(
+                        tcp_header.destination_port(),
+                        tcp_header.source_port(),
+                        self.send.iss,
+                        self.send.wnd,
+                    );
+                    ack_syn.acknowledgment_number = tcp_header.sequence_number() + 1;
+                    ack_syn.syn = true;
+                    ack_syn.ack = true;
+                    let ipv4_packet = etherparse::Ipv4Header::new(
+                        ack_syn.header_len(),
+                        64,
+                        6,
+                        ip_header.destination(),
+                        ip_header.source(),
+                    );
+                    ack_syn.checksum = ack_syn.calc_checksum_ipv4(&ipv4_packet, &[]).expect("failed to copute checsum");
+
+                    ipv4_packet.write(&mut writter).unwrap();
+                    ack_syn.write(&mut writter).unwrap();
+                    let wsize = writter.len();
+                    let dbg = nic.send(&buf[..buf.len()-wsize]);
+                    eprintln!("{:?}", dbg);
+                    return Ok(wsize);
+                } else if tcp_header.ack() {
+                    self.state = State::Establish;
+                    self.recv.nxt += 1;
+                }
+            
+            return Ok(0);
+            }
+            State::Establish => { 
+                eprintln!("establish");
+                return Ok(0);}
+            
         }
         eprintln!(
             "From {:?}:{:?}, len:{:?}, dst:{:?}:{:?}, data:{:x?}",
@@ -65,4 +123,36 @@ impl State {
         );
         Ok(0)
     }
+
+    pub fn accept<'a>(
+        nic: &tun_tap::Iface,
+        ip_header: etherparse::Ipv4HeaderSlice<'a>,
+        tcp_header: etherparse::TcpHeaderSlice<'a>,
+    ) -> Self {
+            
+            let c = Connection {
+                state: State::SynRecv,
+                send: Send_Sequence_Space {
+                    iss: 0,
+                    una: 0,
+                    nxt: 1,
+                    wnd: 10,
+                    up: false,
+                    wl1: 0,
+                    wl2: 0
+                },
+                recv: Recv_Sequence_Space {
+                    nxt : tcp_header.sequence_number() + 1,
+                    wnd : 10,
+                    up: false,
+                    irs: tcp_header.sequence_number()
+                },
+            };
+            
+            c
+            
+    }
+    
+
 }
+
