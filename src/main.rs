@@ -4,17 +4,14 @@ use std::net::Ipv4Addr;
 use std::{clone, io, vec};
 
 use tcp::Connection;
+use tcp_rust::Interface;
 mod tcp;
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
-struct Quad {
-    src: (Ipv4Addr, u16),
-    dst: (Ipv4Addr, u16),
-}
 
 fn main() -> io::Result<()> {
-    let mut connections: HashMap<Quad, tcp::Connection> = HashMap::new();
+    let mut connections: HashMap<tcp_rust::Quad, tcp::Connection> = HashMap::new();
     let listen = 80;
+    let interface = Interface::new();
     let nic = tun_tap::Iface::without_packet_info("tun0", tun_tap::Mode::Tun).expect("failed to cr");
     let mut buf = vec![0u8; 1504];
     
@@ -52,7 +49,7 @@ fn main() -> io::Result<()> {
                         }
                         let data_start = ip_header.slice().len() + tcp_header.slice().len();
                         connections
-                            .entry(Quad {
+                            .entry(tcp_rust::Quad {
                                 src: (src, tcp_header.source_port()),
                                 dst: (dst, tcp_header.destination_port()),
                             })

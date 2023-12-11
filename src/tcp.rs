@@ -1,20 +1,46 @@
-use std::io::Write;
+use std::{io, time};
+use bitflags::bitflags;
+use std::collections::BTreeMap;
 
-use crate::tcp;
-
-
+bitflags! {
+    pub(crate) struct Avaliable: u8 {
+        const READ = 0b00000001;
+        const WRITE = 0b00000010; 
+    }
+}
 
 pub enum State {
-    Closed,
-    Listen,
+    //Closed,
+    //Listen,
     SynRecv,
     Establish,
+    // 关闭阶段1
+    FinWait1,
+    // 关闭阶段2
+    FinWait2,
+    // 关闭完了，等待对方确定收到ACK
+    TimeWait,
+}
+
+pub struct Timers {
+    // 追踪每个发送包的平均时间
+    send_times: BTreeMap<u32, time::Instant>,
+    // 平滑往返时间，估计往返时间。 
+    //α（一个平滑因子，例如 0.125）srtt = (1 - α) * srtt + α * rtt_sample，这里 rtt_sample 是新的 RTT 测量值。
+    srtt: f64,
 }
 
 pub struct Connection {
     state: State,
     send: Send_Sequence_Space,
     recv: Recv_Sequence_Space,
+    timers: Timers,
+    closed: bool,
+}
+
+impl Connection {
+    fn is_rsv_closed(&self) {}
+    fn availablity(&self) {}
 }
  
 // RFC 793 S3.2 
@@ -66,13 +92,7 @@ impl Connection {
         let mut buf = [0u8; 1500];
         let mut writter = &mut buf[..];
         match self.state {
-            State::Closed => {
-                //throw out the packet
-                return Ok(0);
-            }
-            State::Listen => {
-                
-            }
+            
             State::SynRecv => {
                 //send a ack
                 if tcp_header.syn() {
@@ -92,7 +112,8 @@ impl Connection {
                         ip_header.destination(),
                         ip_header.source(),
                     );
-                    ack_syn.checksum = ack_syn.calc_checksum_ipv4(&ipv4_packet, &[]).expect("failed to copute checsum");
+                    //kernel does that
+                    //ack_syn.checksum = ack_syn.calc_checksum_ipv4(&ipv4_packet, &[]).expect("failed to copute checsum");
 
                     ipv4_packet.write(&mut writter).unwrap();
                     ack_syn.write(&mut writter).unwrap();
@@ -109,7 +130,11 @@ impl Connection {
             }
             State::Establish => { 
                 eprintln!("establish");
-                return Ok(0);}
+                return Ok(0);
+            }
+            State::FinWait1 => {},
+            State::FinWait2 => {},
+            State::TimeWait => {},
             
         }
         eprintln!(
@@ -147,12 +172,26 @@ impl Connection {
                     up: false,
                     irs: tcp_header.sequence_number()
                 },
+                timers: todo!(),
+                closed: todo!(),
             };
             
             c
             
     }
-    
-
+    // 当前往 nic 中写入
+    pub fn write() {}
+    // 发送一个rst报文重置TCP连接
+    pub fn send_rst() {}
+    //设计为定期处理TCP连接的状态
+    pub fn on_tick() {}
+    //关闭连接
+    pub fn close(&mut self) {}
 }
 
+fn wrapping_lt(lhseq: u32, rhseq: u32) -> bool {
+    lhseq.wrapping_sub(rhseq) > (1 <<31)
+}
+fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
+    wrapping_lt(start, x) && wrapping_lt(x, end)
+}
