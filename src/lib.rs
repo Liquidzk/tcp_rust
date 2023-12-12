@@ -66,7 +66,9 @@ struct ConnectionManager {
 fn packet_loop(mut nic: tun_tap::Iface, interfacehandle: InterfaceHandle) -> io::Result<()> {
     let mut buf = [0u8; 1504];
 
-    loop {}
+    loop {
+        
+    }
 }
 
 impl Interface {
