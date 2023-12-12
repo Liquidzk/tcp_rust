@@ -7,14 +7,14 @@ use tcp::Connection;
 use tcp_rust::Interface;
 mod tcp;
 
-
 fn main() -> io::Result<()> {
     let mut connections: HashMap<tcp_rust::Quad, tcp::Connection> = HashMap::new();
     let listen = 80;
     let interface = Interface::new();
-    let nic = tun_tap::Iface::without_packet_info("tun0", tun_tap::Mode::Tun).expect("failed to cr");
+    let nic =
+        tun_tap::Iface::without_packet_info("tun0", tun_tap::Mode::Tun).expect("failed to cr");
     let mut buf = vec![0u8; 1504];
-    
+
     loop {
         let nbytes = nic.recv(&mut buf)?;
         // let flags = u16::from_be_bytes([buf[0], buf[1]]);
@@ -53,7 +53,11 @@ fn main() -> io::Result<()> {
                                 src: (src, tcp_header.source_port()),
                                 dst: (dst, tcp_header.destination_port()),
                             })
-                            .or_insert(Connection::accept(&nic, ip_header.clone(), tcp_header.clone()))
+                            .or_insert(Connection::accept(
+                                &nic,
+                                ip_header.clone(),
+                                tcp_header.clone(),
+                            ))
                             .on_packet(&nic, ip_header, tcp_header, &buf[data_start..nbytes])
                             .unwrap();
                     }

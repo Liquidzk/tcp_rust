@@ -1,11 +1,11 @@
-use std::{io, time};
 use bitflags::bitflags;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::{io, time};
 
 bitflags! {
     pub(crate) struct Avaliable: u8 {
         const READ = 0b00000001;
-        const WRITE = 0b00000010; 
+        const WRITE = 0b00000010;
     }
 }
 
@@ -25,26 +25,33 @@ pub enum State {
 pub struct Timers {
     // 追踪每个发送包的平均时间
     send_times: BTreeMap<u32, time::Instant>,
-    // 平滑往返时间，估计往返时间。 
+    // 平滑往返时间，估计往返时间。
     //α（一个平滑因子，例如 0.125）srtt = (1 - α) * srtt + α * rtt_sample，这里 rtt_sample 是新的 RTT 测量值。
     srtt: f64,
 }
 
 pub struct Connection {
     state: State,
-    send: Send_Sequence_Space,
-    recv: Recv_Sequence_Space,
+    send: SendSequenceSpace,
+    recv: RecvSequenceSpace,
+    ip_header: etherparse::Ipv4Header,
+    tcp_header: etherparse::TcpHeader,
     timers: Timers,
     closed: bool,
+
+    pub incoming: VecDeque<u8>,
+    pub unacked: VecDeque<u8>,
+
+    closed_at: Option<u32>,
 }
 
 impl Connection {
     fn is_rsv_closed(&self) {}
     fn availablity(&self) {}
 }
- 
-// RFC 793 S3.2 
-pub struct Send_Sequence_Space {
+
+// RFC 793 S3.2
+pub struct SendSequenceSpace {
     // "Unacknowledged"（未确认的）。这是已发送但尚未收到确认的数据的序列号的最小值。
     una: u32,
     // nxt: "Next"（下一个）。这是下一个要发送的数据的序列号。
@@ -53,7 +60,7 @@ pub struct Send_Sequence_Space {
     wnd: u16,
     // "Urgent Pointer"（紧急指针）。当设置为真（true）时，表示有紧急数据需要被处理。
     up: bool,
-    /* 
+    /*
        wl1, wl2: 这两个变量与 "Window Update"（窗口更新）相关。
        它们用于确定何时可以更新窗口的大小。
        wl1 记录了最后一次接收窗口更新的序列号，
@@ -64,11 +71,11 @@ pub struct Send_Sequence_Space {
     /**
        "Initial Send Sequence number"（初始发送序列号）。
        这是一个连接开始时的序列号，用于数据包的排序和丢失数据的检测。
-    **/  
+    **/
     iss: u32,
 }
 
-pub struct Recv_Sequence_Space {
+pub struct RecvSequenceSpace {
     // 下一个期望接收的数据的序列号
     nxt: u32,
     // 接收方愿意接收的数据量
@@ -79,7 +86,6 @@ pub struct Recv_Sequence_Space {
     irs: u32,
 }
 
-
 impl Connection {
     pub fn on_packet<'a>(
         &mut self,
@@ -88,11 +94,9 @@ impl Connection {
         tcp_header: etherparse::TcpHeaderSlice<'a>,
         data: &'a [u8],
     ) -> std::io::Result<usize> {
-        
         let mut buf = [0u8; 1500];
         let mut writter = &mut buf[..];
         match self.state {
-            
             State::SynRecv => {
                 //send a ack
                 if tcp_header.syn() {
@@ -118,24 +122,23 @@ impl Connection {
                     ipv4_packet.write(&mut writter).unwrap();
                     ack_syn.write(&mut writter).unwrap();
                     let wsize = writter.len();
-                    let dbg = nic.send(&buf[..buf.len()-wsize]);
+                    let dbg = nic.send(&buf[..buf.len() - wsize]);
                     eprintln!("{:?}", dbg);
                     return Ok(wsize);
                 } else if tcp_header.ack() {
                     self.state = State::Establish;
                     self.recv.nxt += 1;
                 }
-            
-            return Ok(0);
+
+                return Ok(0);
             }
-            State::Establish => { 
+            State::Establish => {
                 eprintln!("establish");
                 return Ok(0);
             }
-            State::FinWait1 => {},
-            State::FinWait2 => {},
-            State::TimeWait => {},
-            
+            State::FinWait1 => {}
+            State::FinWait2 => {}
+            State::TimeWait => {}
         }
         eprintln!(
             "From {:?}:{:?}, len:{:?}, dst:{:?}:{:?}, data:{:x?}",
@@ -154,30 +157,33 @@ impl Connection {
         ip_header: etherparse::Ipv4HeaderSlice<'a>,
         tcp_header: etherparse::TcpHeaderSlice<'a>,
     ) -> Self {
-            
-            let c = Connection {
-                state: State::SynRecv,
-                send: Send_Sequence_Space {
-                    iss: 0,
-                    una: 0,
-                    nxt: 1,
-                    wnd: 10,
-                    up: false,
-                    wl1: 0,
-                    wl2: 0
-                },
-                recv: Recv_Sequence_Space {
-                    nxt : tcp_header.sequence_number() + 1,
-                    wnd : 10,
-                    up: false,
-                    irs: tcp_header.sequence_number()
-                },
-                timers: todo!(),
-                closed: todo!(),
-            };
-            
-            c
-            
+        let c = Connection {
+            state: State::SynRecv,
+            send: SendSequenceSpace {
+                iss: 0,
+                una: 0,
+                nxt: 1,
+                wnd: 10,
+                up: false,
+                wl1: 0,
+                wl2: 0,
+            },
+            recv: RecvSequenceSpace {
+                nxt: tcp_header.sequence_number() + 1,
+                wnd: 10,
+                up: false,
+                irs: tcp_header.sequence_number(),
+            },
+            timers: todo!(),
+            closed: todo!(),
+            ip_header: todo!(),
+            tcp_header: todo!(),
+            incoming: todo!(),
+            unacked: todo!(),
+            closed_at: todo!(),
+        };
+
+        c
     }
     // 当前往 nic 中写入
     pub fn write() {}
@@ -190,7 +196,7 @@ impl Connection {
 }
 
 fn wrapping_lt(lhseq: u32, rhseq: u32) -> bool {
-    lhseq.wrapping_sub(rhseq) > (1 <<31)
+    lhseq.wrapping_sub(rhseq) > (1 << 31)
 }
 fn is_between_wrapped(start: u32, x: u32, end: u32) -> bool {
     wrapping_lt(start, x) && wrapping_lt(x, end)
