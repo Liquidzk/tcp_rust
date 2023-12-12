@@ -153,19 +153,80 @@ impl Drop for TcpStream {
 
 impl Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        Ok(0)
+        let mut cm = self.interfacehandlle.manager_mutex.lock().unwrap();
+        loop {
+            let c = cm.connections.get_mut(&self.quad).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "Stream was terminated unexpectedly. ",
+                )
+            })?;
+
+            if c.is_rsv_closed() && c.incoming.is_empty() {
+                return Ok(0);
+            }
+
+            if !c.incoming.is_empty() {
+                let (head, tail) = c.incoming.as_slices();
+                let hread = std::cmp::min(buf.len(), head.len());
+                buf[..hread].copy_from_slice(&head[..hread]);
+                c.incoming.drain(..hread);
+                return Ok(hread);
+            }
+
+            cm = self.interfacehandlle.rcv_var.wait(cm).unwrap();
+        }
     }
 }
 
 impl Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        Ok(0)
+        let mut cm = self.interfacehandlle.manager_mutex.lock().unwrap();
+        let c = cm.connections.get_mut(&self.quad).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+        if c.unacked.len() >= SENDQUEUE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many bytes buffered",
+            ));
+        }
+        let nwrite = std::cmp::min(buf.len(), SENDQUEUE_SIZE - c.unacked.len());
+        c.unacked.extend(buf[..nwrite].iter());
+        Ok(nwrite)
     }
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        let mut cm = self.interfacehandlle.manager_mutex.lock().unwrap();
+        let c = cm.connections.get_mut(&self.quad).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+        if c.unacked.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many bytes buffered",
+            ))
+        }
     }
 }
 
 impl TcpStream {
-    pub fn shutdown() {}
+    pub fn shutdown(&mut self) -> io::Result<()> {
+        let mut cm = self.interfacehandlle.manager_mutex.lock().unwrap();
+        let c = cm.connections.get_mut(&self.quad).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+
+        c.close()
+    }
 }

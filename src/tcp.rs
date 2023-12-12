@@ -46,8 +46,12 @@ pub struct Connection {
 }
 
 impl Connection {
-    fn is_rsv_closed(&self) {}
-    fn availablity(&self) {}
+    pub fn is_rsv_closed(&self) -> bool {
+        true
+    }
+    pub fn availablity(&self) -> bool {
+        true
+    }
 }
 
 // RFC 793 S3.2
@@ -192,7 +196,22 @@ impl Connection {
     //设计为定期处理TCP连接的状态
     pub fn on_tick() {}
     //关闭连接
-    pub fn close(&mut self) {}
+    pub fn close(&mut self) -> io::Result<()> {
+        self.closed = true;
+        match self.state {
+            State::SynRecv | State::Establish => {
+                self.state = State::FinWait1;
+            }
+            State::FinWait1 | State::FinWait2 => {}
+            State::TimeWait => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "all ready closed",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn wrapping_lt(lhseq: u32, rhseq: u32) -> bool {
