@@ -194,7 +194,9 @@ impl Connection {
     // 发送一个rst报文重置TCP连接
     pub fn send_rst() {}
     //设计为定期处理TCP连接的状态
-    pub fn on_tick() {}
+    pub fn on_tick(&mut self, &mut nic: tun_tap::Iface) -> io::Result<()> {
+        Ok(())
+    }
     //关闭连接
     pub fn close(&mut self) -> io::Result<()> {
         self.closed = true;

@@ -9,3 +9,8 @@ edition = "2021"
 tun-tap = "0.1.2"
 etherparse = "0.13.0"
 bitflags = "2.4.1"
+nix = {version = "0.13" , features = ["poll"]}
+
+
+[lib]
+name = "tcp_rust"

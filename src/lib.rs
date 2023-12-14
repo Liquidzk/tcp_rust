@@ -67,7 +67,45 @@ fn packet_loop(mut nic: tun_tap::Iface, interfacehandle: InterfaceHandle) -> io:
     let mut buf = [0u8; 1504];
 
     loop {
-        
+        // 这个玩意可以获取原始的文件描述符
+        use std::os::unix::io::AsRawFd;
+        let mut pfd = [nix::poll::PollFd::new(
+            &(nic.as_raw_fd()),
+            nix::poll::PollFlags::POLLIN,
+        )];
+        let n = nix::poll::poll(&pfd, 10).map_err(|e| e).unwrap()?;
+        assert_ne!(n, -1);
+        if n == 0 {
+            let cm = interfacehandle.manager_mutex.lock().unwrap();
+            for con in cm.connections.values_mut() {
+                con.on_tick(&mut nic)?;
+            }
+            continue;
+        }
+        assert_eq!(n, 1);
+        let nbytes = nic.recv(&mut buf[..])?;
+
+        match etherparse::Ipv4HeaderSlice::from_slice(&buf[..nbytes]) {
+            Ok(ipheader) => {
+                let src = ipheader.source_addr();
+                let dst = ipheader.destination_addr();
+                if ipheader.protocol() != 0x06 {
+                    eprintln!("not tcp protocol");
+                    continue;
+                }
+                match etherparse::TcpHeaderSlice::from_slice(&buf[ipheader.slice().len()..nbytes]) {
+                    Ok(tcp_header) => {
+                        use std::collections::hash_map::Entry;
+                    }
+                    Err(e) => {
+                        eprint!("tcp parse badly");
+                    }
+                }
+            }
+            Err(_) => {
+                eprintln!("ignoring weird packet {:?}", e);
+            }
+        }
     }
 }
 
@@ -122,7 +160,7 @@ pub struct TcpListener {
 }
 
 impl TcpListener {
-    fn accept(&mut self) -> io::Result<TcpStream> {
+    pub fn accept(&mut self) -> io::Result<TcpStream> {
         let mut cm = self.interfacehandle.manager_mutex.lock().unwrap();
         loop {
             if let Some(quad) = cm
