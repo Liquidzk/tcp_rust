@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::f32::consts::E;
+use std::future::pending;
 use std::io::prelude::*;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Condvar, Mutex};
@@ -94,8 +95,42 @@ fn packet_loop(mut nic: tun_tap::Iface, interfacehandle: InterfaceHandle) -> io:
                     continue;
                 }
                 match etherparse::TcpHeaderSlice::from_slice(&buf[ipheader.slice().len()..nbytes]) {
-                    Ok(tcp_header) => {
+                    Ok(tcpheader) => {
                         use std::collections::hash_map::Entry;
+                        let data_start = ipheader.slice().len() + tcpheader.slice().len();
+                        let quad = Quad {
+                            src: (ipheader.source_addr(), tcpheader.source_port()),
+                            dst: (ipheader.destination_addr(), tcpheader.destination_port()),
+                        };
+                        let mut cmg = interfacehandle.manager_mutex.lock().unwrap();
+                        let mg = &mut *cmg;
+                        match mg.connections.entry(quad) {
+                            Entry::Occupied(mut con) => {
+                                eprintln!("got packet from known quad {:?}", quad);
+                                let flag = con.get_mut().on_packet(
+                                    &nic,
+                                    ipheader,
+                                    tcpheader,
+                                    &buf[data_start..nbytes],
+                                )?;
+                                // eprintln!("has read {} bytes", flag);
+                                drop(cmg);
+                            }
+                            Entry::Vacant(c) => {
+                                eprintln!("got packet from unknown host");
+                                if let Some(pending) =
+                                    cmg.pending.get_mut(&tcpheader.destination_port())
+                                {
+                                    if let Some(con) = Connection::accept(&nic, ipheader, tcpheader)
+                                    {
+                                        c.insert(con);
+                                        pending.push_back(quad);
+                                        drop(cmg);
+                                        interfacehandle.pending_var.notify_all();
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         eprint!("tcp parse badly");

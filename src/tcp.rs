@@ -97,7 +97,7 @@ impl Connection {
         ip_header: etherparse::Ipv4HeaderSlice<'a>,
         tcp_header: etherparse::TcpHeaderSlice<'a>,
         data: &'a [u8],
-    ) -> std::io::Result<usize> {
+    ) -> std::io::Result<Avaliable> {
         let mut buf = [0u8; 1500];
         let mut writter = &mut buf[..];
         match self.state {
@@ -160,7 +160,10 @@ impl Connection {
         nic: &tun_tap::Iface,
         ip_header: etherparse::Ipv4HeaderSlice<'a>,
         tcp_header: etherparse::TcpHeaderSlice<'a>,
-    ) -> Self {
+    ) -> io::Result<Option<Self>> {
+        if tcp_header.syn() == 0 {
+            return;
+        }
         let c = Connection {
             state: State::SynRecv,
             send: SendSequenceSpace {
@@ -178,13 +181,16 @@ impl Connection {
                 up: false,
                 irs: tcp_header.sequence_number(),
             },
-            timers: todo!(),
-            closed: todo!(),
-            ip_header: todo!(),
-            tcp_header: todo!(),
-            incoming: todo!(),
-            unacked: todo!(),
-            closed_at: todo!(),
+            timers: Timers {
+                send_times: BTreeMap::default(),
+                srtt: time::Duration::from_secs_f64(0.1).as_secs_f64(),
+            },
+            closed: false,
+            ip_header: ip_header.to_header(),
+            tcp_header: tcp_header.to_header(),
+            incoming: VecDeque::default(),
+            unacked: VecDeque::default(),
+            closed_at: None,
         };
 
         c
@@ -195,7 +201,10 @@ impl Connection {
     pub fn send_rst() {}
     //设计为定期处理TCP连接的状态
     pub fn on_tick(&mut self, &mut nic: tun_tap::Iface) -> io::Result<()> {
-        Ok(())
+        if let State::TimeWait | State::FinWait1 = self.state {
+            return Ok(());
+        }
+        return Ok(());
     }
     //关闭连接
     pub fn close(&mut self) -> io::Result<()> {
